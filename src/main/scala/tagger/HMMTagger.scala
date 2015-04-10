@@ -7,26 +7,30 @@ import java.io._
 /**
  * @author rialmat
  */
-class HMMTagger(filename : String, testfile : String) {
+class HMMTagger(devfile : String, testfile : String) {
   
   type Bigram[T] = Tuple2[T, T]
   type Trigram[T] = Tuple3[T, T, T]
-  type ThreeDArray = Array[Array[Array[Int]]]
+  type ThreeDArray[T] = Array[Array[Array[T]]]
   private var unigramCounts : Map[String, Int] = Map()
   private var bigramCounts : Map[Bigram[String], Int] = Map()
   private var trigramCounts : Map[Trigram[String], Int] = Map()
   private var emitCounts : Map[Bigram[String], Int] = Map()
   private var words : Set[String] = Set()
-  private var possibleTags: Set[String] = Set()
+  //private var possibleTags: Set[String] = Set()
+  private final val TAGS : Array[String] = readStats(devfile)
   private val tests : List[List[String]] = readTests(testfile)
   
-  //private final val TAGS : List[String] = List("O", "I-GENE")
+  def run {
+    writeResults(tests, tests.map(viterbi))
+  }
   def updateCounts[A](m : Map[A, Int], key : A, count : Int) : Map[A, Int] = {
     val oldcount = m.getOrElse(key, 0)
     m + (key -> (oldcount + count))
   }
   
-  def readStats(filename : String) : Unit = {
+  def readStats(filename : String) : Array[String] = {
+    var possibleTags: Set[String] = Set()
     for (line <- Source.fromFile(filename).getLines()) {
       val tokens = line.split(" ")
 
@@ -44,6 +48,8 @@ class HMMTagger(filename : String, testfile : String) {
         trigramCounts = updateCounts(trigramCounts, (tokens(2), tokens(3), tokens(4)), count)
       }
     }
+    (List("*", "STOP") ++ possibleTags.toList).toArray
+    
   }
   
   def readTests(testfile : String) : List[List[String]] = {
@@ -86,22 +92,53 @@ class HMMTagger(filename : String, testfile : String) {
     else  "_RARE_"
   }
   
-  def getEmissionProb(tag : String, token : String) : Double = {
+  def getEmissionProb(tagIndex : Int, token : String) : Double = {
     val tok = transformToken(token)
+    val tag = TAGS(tagIndex)
     log((emitCounts.getOrElse((tag, tok), 0).toDouble) / unigramCounts(tag))
   }
   
-  def getCondintionProb(tri : Trigram[String], bi : Bigram[String]) : Double = {
+  def getCondintionProb(triIndices : Trigram[Int]) : Double = {
+    val bi = (TAGS(triIndices._2), TAGS(triIndices._3))
+    val tri = (TAGS(triIndices._1), TAGS(triIndices._2), TAGS(triIndices._3))
     log(bigramCounts(bi).toDouble / trigramCounts(tri))
   }
 
-  def updatePi(pi : ThreeDArray, index : Trigram[Int]) {
+  def viterbi(test : List[String]) : List[String] = {
+    val numTags = TAGS.size
+    def getTags(index : Int) : Iterable[Int] = {
+      if (index <= 0) Iterable(0)
+      else            2 until TAGS.size
+    }
+    var pi : ThreeDArray[Double] = Array.ofDim(test.size + 1, numTags, numTags)
+    var bp : ThreeDArray[Int] = Array.ofDim(test.size + 1)
+    pi(0)(0)(0) = 0.0
+    for (k <- 1 to test.size) {
+      for (u <- getTags(k - 1); v <- getTags(k)) {
+        val candidates = for {
+          w <- getTags(k - 2)
+          p = pi(k - 1)(w)(u) + 
+              getCondintionProb((v, w, u)) + 
+              getEmissionProb(v, test(k - 1)) 
+        } yield (p, w)
+        val maxCandidate = candidates.max      
+        pi(k)(u)(v) = maxCandidate._1
+        bp(k)(u)(v) = maxCandidate._2
+      }
+    }
     
+    val last2Tags = for {
+      u <- getTags(test.size - 1)
+      v <- getTags(test.size)
+    } yield(u, v)
+    val (penult, last) = last2Tags.maxBy[Double] {case (u, v) => 
+      pi(test.size)(u)(v) + getCondintionProb((1, u, v)) }
+    var tags : Array[Int] = Array.ofDim(test.size)
+    tags(test.size - 1) = last
+    tags(test.size - 2) = penult
+    for (n <- test.size - 3 to 0 by -1) {
+      tags(n) = bp(n + 3)(tags(n + 1))(tags(n + 2))
+    }
+    tags.toList.map(TAGS(_))
   }
-  def viterbi(test : List[String]) = {
-    val numTags = possibleTags.size
-    var pi : ThreeDArray = Array.ofDim(test.size + 1, numTags + 1, numTags + 1)
-    
-  }
-  
 }
