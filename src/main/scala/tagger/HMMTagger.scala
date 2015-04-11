@@ -4,11 +4,7 @@ import scala.collection.immutable
 import scala.math._
 import java.io._
 
-/**
- * @author rialmat
- */
 class HMMTagger(devfile : String, testfile : String) {
-  
   type Bigram[T] = Tuple2[T, T]
   type Trigram[T] = Tuple3[T, T, T]
   type ThreeDArray[T] = Array[Array[Array[T]]]
@@ -33,23 +29,20 @@ class HMMTagger(devfile : String, testfile : String) {
     var possibleTags: Set[String] = Set()
     for (line <- Source.fromFile(filename).getLines()) {
       val tokens = line.split(" ")
-
       val count= tokens(0).toInt
       if (tokens(1) == "WORDTAG") {
         emitCounts = updateCounts(emitCounts, (tokens(2), tokens(3)), count)
-        possibleTags = possibleTags + (tokens(2), tokens(3))
-        
+        possibleTags = possibleTags + tokens(2)     
         words += tokens(3)
       } else if (tokens(1) == "1-GRAM") {
         unigramCounts = updateCounts(unigramCounts, tokens(2), count)
-      } else if (tokens(2) == "2-GRAM") {
+      } else if (tokens(1) == "2-GRAM") {
         bigramCounts = updateCounts(bigramCounts, (tokens(2), tokens(3)), count)
-      } else {
+      } else if (tokens(1) == "3-GRAM") {
         trigramCounts = updateCounts(trigramCounts, (tokens(2), tokens(3), tokens(4)), count)
       }
     }
-    (List("*", "STOP") ++ possibleTags.toList).toArray
-    
+    (List("*", "STOP") ++ possibleTags.toList).toArray    
   }
   
   def readTests(testfile : String) : List[List[String]] = {
@@ -57,22 +50,19 @@ class HMMTagger(devfile : String, testfile : String) {
       val (head, rest) = itr.span (!_.isEmpty())
       val test = head.toList
       if (test.isEmpty) List()
-      else test :: mkTests(rest)
+      else test :: mkTests(rest.dropWhile (_.isEmpty()))
     }
     mkTests(Source.fromFile(testfile).getLines())
   }
   
-  def writeResults(tests : List[List[String]], assignments: List[List[String]]) : Unit = {
-    def mkResult(tests : List[List[String]], assignments: List[List[String]]) : List[String] = {
-      for {
-        test <- tests
-        tags <- assignments
-        val z = for {
-          token <- test
-          tag <- tags
-        } yield (token ++ " " ++ tag)
-      } yield z.mkString("\n")
+  def mkResult(tests : List[List[String]], assignments: List[List[String]]) : List[String] = {
+    def tag(test : List[String], tags : List[String]) : String = {
+      (test, tags).zipped.map(_ ++ " " ++ _).mkString("\n")
     }
+    (tests, assignments).zipped.map(tag(_, _))
+  }
+  
+  def writeResults(tests : List[List[String]], assignments: List[List[String]]) : Unit = {
     val resultFile = new PrintWriter(new File(testfile ++ ".out"))
     resultFile.write(mkResult(tests, assignments).mkString("\n\n"))
     resultFile.close()
@@ -82,7 +72,7 @@ class HMMTagger(devfile : String, testfile : String) {
   def containsDigit(token : String) : Boolean = token.exists (_.isLetter)
   def isAllCaps(token : String) : Boolean = token.forall (_.isUpper)
   def isLastCap(token : String) : Boolean = !token.isEmpty() && token.last.isUpper
-  def isRare(token : String) : Boolean = words.contains(token)
+  def isRare(token : String) : Boolean = !words.contains(token)
   
   def transformToken(token : String) : String = {
     if (!isRare(token))  token
@@ -100,8 +90,8 @@ class HMMTagger(devfile : String, testfile : String) {
   
   def getCondintionProb(triIndices : Trigram[Int]) : Double = {
     val bi = (TAGS(triIndices._2), TAGS(triIndices._3))
-    val tri = (TAGS(triIndices._1), TAGS(triIndices._2), TAGS(triIndices._3))
-    log(bigramCounts(bi).toDouble / trigramCounts(tri))
+    val tri = (TAGS(triIndices._2), TAGS(triIndices._3), TAGS(triIndices._1))
+    log(trigramCounts(tri).toDouble / bigramCounts(bi))
   }
 
   def viterbi(test : List[String]) : List[String] = {
@@ -111,8 +101,9 @@ class HMMTagger(devfile : String, testfile : String) {
       else            2 until TAGS.size
     }
     var pi : ThreeDArray[Double] = Array.ofDim(test.size + 1, numTags, numTags)
-    var bp : ThreeDArray[Int] = Array.ofDim(test.size + 1)
+    var bp : ThreeDArray[Int] = Array.ofDim(test.size + 1, numTags, numTags)
     pi(0)(0)(0) = 0.0
+    //print(test)
     for (k <- 1 to test.size) {
       for (u <- getTags(k - 1); v <- getTags(k)) {
         val candidates = for {
@@ -121,9 +112,9 @@ class HMMTagger(devfile : String, testfile : String) {
               getCondintionProb((v, w, u)) + 
               getEmissionProb(v, test(k - 1)) 
         } yield (p, w)
-        val maxCandidate = candidates.max      
-        pi(k)(u)(v) = maxCandidate._1
-        bp(k)(u)(v) = maxCandidate._2
+        val (p, b) = candidates.max      
+        pi(k)(u)(v) = p
+        bp(k)(u)(v) = b
       }
     }
     
@@ -140,5 +131,12 @@ class HMMTagger(devfile : String, testfile : String) {
       tags(n) = bp(n + 3)(tags(n + 1))(tags(n + 2))
     }
     tags.toList.map(TAGS(_))
+  }
+}
+
+object Main {
+  def main(args : Array[String]) : Unit = {
+    val tagger = new HMMTagger(args(0), args(1))
+    tagger.run
   }
 }
